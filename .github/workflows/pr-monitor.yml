@@ -15,14 +15,29 @@ jobs:
       contents: read
 
     steps:
-      - name: Check PR
+      - name: Check Open PRs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
-          echo "Checking PRs..."
+          echo "🔍 Checking pull requests..."
 
-          gh pr list \
+          PRS=$(gh pr list \
             --repo "$REPO" \
             --state open \
-            --json number,title,author,url
+            --json number,title,author,url)
+
+          echo "$PRS"
+
+          COUNT=$(echo "$PRS" | jq 'length')
+
+          if [ "$COUNT" -gt 0 ]; then
+            echo ""
+            echo "⚠️ You have $COUNT open pull request(s)."
+
+            echo "$PRS" | jq -r '.[] |
+              "⚠️ PR #\(.number) - \(.title) is not merged yet.\n   Author: \(.author.login)\n   URL: \(.url)\n"'
+          else
+            echo ""
+            echo "✅ No open pull requests."
+          fi
