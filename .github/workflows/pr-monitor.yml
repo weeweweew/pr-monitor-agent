@@ -1,9 +1,11 @@
-name: PR Monitor
+name: PR Monitor Report
 
 on:
   schedule:
+    # Runs every 30 minutes
     - cron: "*/30 * * * *"
 
+  # Allows you to run it manually
   workflow_dispatch:
 
 jobs:
@@ -15,29 +17,122 @@ jobs:
       contents: read
 
     steps:
-      - name: Check Open PRs
+      - name: Generate PR Monitoring Report
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
-          echo "🔍 Checking pull requests..."
 
+          echo "======================================"
+          echo "       PULL REQUEST MONITOR"
+          echo "======================================"
+
+          # Get all open PRs
           PRS=$(gh pr list \
             --repo "$REPO" \
             --state open \
-            --json number,title,author,url)
-
-          echo "$PRS"
+            --limit 100 \
+            --json number,title,author,headRefName,baseRefName,createdAt,updatedAt,url,isDraft)
 
           COUNT=$(echo "$PRS" | jq 'length')
 
-          if [ "$COUNT" -gt 0 ]; then
-            echo ""
-            echo "⚠️ You have $COUNT open pull request(s)."
+          echo ""
+          echo "Open PR Count: $COUNT"
+          echo ""
 
-            echo "$PRS" | jq -r '.[] |
-              "⚠️ PR #\(.number) - \(.title) is not merged yet.\n   Author: \(.author.login)\n   URL: \(.url)\n"'
+          # Create Markdown report
+          cat > pr-report.md << 'EOF'
+          # Pull Request Monitoring Report
+
+          **Repository:** $REPO
+
+          ---
+
+          EOF
+
+          if [ "$COUNT" -eq 0 ]; then
+
+            cat >> pr-report.md << 'EOF'
+          ## ✅ No Open Pull Requests
+
+          There are currently no open pull requests requiring monitoring.
+          EOF
+
           else
-            echo ""
-            echo "✅ No open pull requests."
+
+            echo "$PRS" | jq -c '.[]' | while read PR
+            do
+
+              NUMBER=$(echo "$PR" | jq -r '.number')
+              TITLE=$(echo "$PR" | jq -r '.title')
+              AUTHOR=$(echo "$PR" | jq -r '.author.login')
+              SOURCE=$(echo "$PR" | jq -r '.headRefName')
+              TARGET=$(echo "$PR" | jq -r '.baseRefName')
+              CREATED=$(echo "$PR" | jq -r '.createdAt')
+              UPDATED=$(echo "$PR" | jq -r '.updatedAt')
+              URL=$(echo "$PR" | jq -r '.url')
+              DRAFT=$(echo "$PR" | jq -r '.isDraft')
+
+              # Convert timestamps to IST
+              CREATED_IST=$(date -d "$CREATED" '+%d-%b-%Y %I:%M %p IST')
+              UPDATED_IST=$(date -d "$UPDATED" '+%d-%b-%Y %I:%M %p IST')
+
+              # Calculate how long PR has been open
+              CREATED_SECONDS=$(date -d "$CREATED" +%s)
+              CURRENT_SECONDS=$(date +%s)
+
+              OPEN_SECONDS=$((CURRENT_SECONDS - CREATED_SECONDS))
+
+              OPEN_DAYS=$((OPEN_SECONDS / 86400))
+              OPEN_HOURS=$(((OPEN_SECONDS % 86400) / 3600))
+              OPEN_MINUTES=$(((OPEN_SECONDS % 3600) / 60))
+
+              if [ "$DRAFT" = "true" ]; then
+                PR_STATUS="🟡 DRAFT"
+              else
+                PR_STATUS="🔴 OPEN"
+              fi
+
+              cat >> pr-report.md << EOF
+
+          ## PR #$NUMBER — $TITLE
+
+          | Field | Details |
+          |---|---|
+          | Status | $PR_STATUS |
+          | Raised By | **$AUTHOR** |
+          | Feature | **$TITLE** |
+          | Source Branch | \`$SOURCE\` |
+          | Target Branch | \`$TARGET\` |
+          | Created | $CREATED_IST |
+          | Last Updated | $UPDATED_IST |
+          | Open Duration | ${OPEN_DAYS}d ${OPEN_HOURS}h ${OPEN_MINUTES}m |
+          | Merge Status | ❌ **NOT MERGED** |
+          | PR URL | [Open PR]($URL) |
+
+          ### Client / Ticket Update
+
+          > ⚠️ PR #$NUMBER for **$TITLE** is currently open.
+          > It was raised by **$AUTHOR** from \`$SOURCE\` targeting \`$TARGET\`.
+          > The PR has not been merged yet.
+
+          ---
+
+          EOF
+
+            done
+
           fi
+
+          echo ""
+          echo "======================================"
+          echo "Generated PR Report"
+          echo "======================================"
+
+          cat pr-report.md
+
+      - name: Upload PR Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-monitor-report
+          path: pr-report.md
